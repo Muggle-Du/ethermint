@@ -589,7 +589,7 @@ func (vbd EthValidateBasicDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simu
 			return ctx, stacktrace.Propagate(err, "failed to unpack MsgEthereumTx Data")
 		}
 		params := vbd.evmKeeper.GetParams(ctx)
-		ethFeeAmout := sdk.Coins{sdk.NewCoin(params.EvmDenom, sdk.NewIntFromBigInt(txData.Fee()))}
+		ethFeeAmount := sdk.Coins{sdk.NewCoin(params.EvmDenom, sdk.NewIntFromBigInt(txData.Fee()))}
 
 		authInfo := cosmosTx.AuthInfo
 		if len(authInfo.SignerInfos) > 0 {
@@ -606,7 +606,7 @@ func (vbd EthValidateBasicDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simu
 			)
 		}
 
-		if !authInfo.Fee.Amount.IsEqual(ethFeeAmout) {
+		if !authInfo.Fee.Amount.IsEqual(ethFeeAmount) {
 			return ctx, stacktrace.Propagate(
 				sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "invalid eth tx AuthInfo Fee Amount"),
 				"invalid data in tx",
