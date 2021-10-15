@@ -2,12 +2,15 @@ package ante
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
+	"reflect"
 
 	"github.com/palantir/stacktrace"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+	cosmostx "github.com/cosmos/cosmos-sdk/types/tx"
 	authante "github.com/cosmos/cosmos-sdk/x/auth/ante"
 
 	ethermint "github.com/tharsis/ethermint/types"
@@ -529,11 +532,15 @@ func (issd EthIncrementSenderSequenceDecorator) AnteHandle(ctx sdk.Context, tx s
 }
 
 // EthValidateBasicDecorator is adapted from ValidateBasicDecorator from cosmos-sdk, it ignores ErrNoSignatures
-type EthValidateBasicDecorator struct{}
+type EthValidateBasicDecorator struct {
+	evmKeeper EVMKeeper
+}
 
 // NewEthValidateBasicDecorator creates a new EthValidateBasicDecorator
-func NewEthValidateBasicDecorator() EthValidateBasicDecorator {
-	return EthValidateBasicDecorator{}
+func NewEthValidateBasicDecorator(ek EVMKeeper) EthValidateBasicDecorator {
+	return EthValidateBasicDecorator{
+		evmKeeper: ek,
+	}
 }
 
 // AnteHandle handles basic validation of tx
@@ -547,6 +554,78 @@ func (vbd EthValidateBasicDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simu
 	// ErrNoSignatures is fine with eth tx
 	if err != nil && !errors.Is(err, sdkerrors.ErrNoSignatures) {
 		return ctx, stacktrace.Propagate(err, "tx basic validation failed")
+	}
+
+	//For eth type cosmos tx, some fields should be veified as zero values,
+	//since we will only verify the signature against the hash of the MsgEthereumTx.Data
+	fmt.Printf("adutest: tx type %v\n", reflect.TypeOf(tx))
+	if cosmosTx, ok := tx.(*cosmostx.Tx); ok {
+		body := cosmosTx.Body
+		if body.Memo != "" || body.TimeoutHeight != uint64(0) || len(body.ExtensionOptions) > 0 || len(body.NonCriticalExtensionOptions) > 0 {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "for eth tx body other fields except Messages should be zero"),
+				"invalid data in tx",
+			)
+		}
+
+		if len(cosmosTx.GetMsgs()) != 1 {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "only 1 ethereum msg supported per tx"),
+				"",
+			)
+		}
+		msg := cosmosTx.GetMsgs()[0]
+		msgEthTx, ok := msg.(*evmtypes.MsgEthereumTx)
+		if !ok {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrapf(sdkerrors.ErrUnknownRequest, "invalid transaction type %T, expected %T", tx, (*evmtypes.MsgEthereumTx)(nil)),
+				"failed to cast transaction",
+			)
+		}
+		ethGasLimit := msgEthTx.GetGas()
+
+		txData, err := evmtypes.UnpackTxData(msgEthTx.Data)
+		if err != nil {
+			return ctx, stacktrace.Propagate(err, "failed to unpack MsgEthereumTx Data")
+		}
+		params := vbd.evmKeeper.GetParams(ctx)
+		ethFeeAmout := sdk.Coins{sdk.NewCoin(params.EvmDenom, sdk.NewIntFromBigInt(txData.Fee()))}
+
+		authInfo := cosmosTx.AuthInfo
+		if len(authInfo.SignerInfos) > 0 {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "for eth tx AuthInfo SignerInfos should be empty"),
+				"invalid data in tx",
+			)
+		}
+
+		if authInfo.Fee.Payer != "" || authInfo.Fee.Granter != "" {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "for eth tx AuthInfo Fee payer and granter should be empty"),
+				"invalid data in tx",
+			)
+		}
+
+		if !authInfo.Fee.Amount.IsEqual(ethFeeAmout) {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "invalid eth tx AuthInfo Fee Amount"),
+				"invalid data in tx",
+			)
+		}
+
+		if authInfo.Fee.GasLimit != ethGasLimit {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "invalid eth tx AuthInfo Fee GasLimit"),
+				"invalid data in tx",
+			)
+		}
+		sigs := cosmosTx.Signatures
+		if len(sigs) > 0 {
+			return ctx, stacktrace.Propagate(
+				sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "for eth tx Signatures should be empty"),
+				"invalid data in tx",
+			)
+		}
 	}
 
 	return next(ctx, tx, simulate)
