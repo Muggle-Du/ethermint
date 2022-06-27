@@ -44,7 +44,9 @@ func (k *Keeper) EndBlock(ctx sdk.Context, req abci.RequestEndBlock) {
 	}
 
 	gasWanted := k.GetTransientGasWanted(ctx)
+	fmt.Printf("original gas wanted: %v\n", gasWanted)
 	gasUsed := ctx.BlockGasMeter().GasConsumedToLimit()
+	fmt.Printf("gas used: %v\n", gasUsed)
 
 	// to prevent BaseFee manipulation we limit the gasWanted so that
 	// gasWanted = max(gasWanted * MinGasMultiplier, gasUsed)
@@ -53,6 +55,7 @@ func (k *Keeper) EndBlock(ctx sdk.Context, req abci.RequestEndBlock) {
 	minGasMultiplier := k.GetParams(ctx).MinGasMultiplier
 	limitedGasWanted := sdk.NewDec(int64(gasWanted)).Mul(minGasMultiplier)
 	gasWanted = sdk.MaxDec(limitedGasWanted, sdk.NewDec(int64(gasUsed))).TruncateInt().Uint64()
+	fmt.Printf("final gas wanted: %v\n", gasWanted)
 	k.SetBlockGasWanted(ctx, gasWanted)
 
 	defer func() {
